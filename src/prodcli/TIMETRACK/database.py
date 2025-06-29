@@ -3,13 +3,13 @@ import sqlite3
 from datetime import datetime
 from typing import List, Optional
 
-from TIMETRACK.model import Sheet, Entry
+from prodcli.TIMETRACK.model import Sheet, Entry
 
-DATABASE_FILE = "timetrack.db" # Or dynamically get this from a config
+DATABASE_FILE = "src/data/timetrack.db" 
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_FILE)
-    conn.row_factory = sqlite3.Row # Allows accessing columns by name
+    conn.row_factory = sqlite3.Row 
     return conn
 
 def create_tables():
@@ -163,7 +163,7 @@ def get_entries_for_sheet(sheet_id: int, start_time: Optional[datetime] = None, 
         sql += " AND start_time >= ?"
         params.append(start_time.isoformat())
     if end_time:
-        sql += " AND start_time <= ?" # Or end_time <= ? depending on desired filtering
+        sql += " AND start_time <= ?" 
         params.append(end_time.isoformat())
 
     sql += " ORDER BY start_time DESC"
@@ -201,5 +201,4 @@ def delete_entry(entry_id: int) -> bool:
     conn.close()
     return rows_affected > 0
 
-# Call this once at the start of your application
 create_tables()

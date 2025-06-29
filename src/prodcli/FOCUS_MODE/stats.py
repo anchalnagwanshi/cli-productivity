@@ -6,7 +6,7 @@ import os
 
 stats_app = typer.Typer()
 
-LOG_FILE = "focus_log.json"
+LOG_FILE = "src/data/focus_log.json"
 
 def log_session(duration: int):
     now = datetime.datetime.now().isoformat()

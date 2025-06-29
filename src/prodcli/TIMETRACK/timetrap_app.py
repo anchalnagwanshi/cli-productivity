@@ -6,12 +6,10 @@ from rich.text import Text
 from datetime import datetime, timedelta
 from typing import Optional, List
 import os
-import dateparser # For natural language parsing
-
-# Assuming your database.py and model.py are in the same directory or correctly imported
-from TIMETRACK.model import Sheet, Entry
-from TIMETRACK.database import (
-    create_tables, get_db_connection, insert_sheet, get_sheet_by_name, get_all_sheets,
+import dateparser 
+from prodcli.TIMETRACK.model import Sheet, Entry
+from prodcli.TIMETRACK.database import (
+    create_tables, insert_sheet, get_sheet_by_name, get_all_sheets,
     insert_entry, update_entry, get_running_entries, get_entries_for_sheet,
     get_entry_by_id, delete_sheet, delete_entry, get_sheet_by_id
 )
@@ -20,7 +18,7 @@ console = Console()
 timetrap_app = typer.Typer()
 
 # --- Global State / Configuration ---
-CURRENT_SHEET_FILE = os.path.expanduser("~/.timetrap_current_sheet") # Store current sheet name
+CURRENT_SHEET_FILE = os.path.expanduser("~/.timetrap_current_sheet") 
 
 def get_current_sheet_name() -> Optional[str]:
     if os.path.exists(CURRENT_SHEET_FILE):
@@ -41,10 +39,10 @@ def get_current_sheet() -> Optional[Sheet]:
 def parse_time_arg(time_str: Optional[str]) -> Optional[datetime]:
     if time_str:
         try:
-            # Try ISO format first for explicit parsing
+           
             return datetime.fromisoformat(time_str)
         except ValueError:
-            # Then try natural language parsing
+            
             parsed_date = dateparser.parse(time_str)
             if parsed_date:
                 return parsed_date
@@ -73,7 +71,7 @@ def main():
     """
     Timetrap: A simple command-line time tracker.
     """
-    create_tables() # Ensure tables exist when any command is run
+    create_tables() 
 
 @timetrap_app.command()
 def sheet(sheet_name: Optional[str] = typer.Argument(None)):
@@ -94,7 +92,6 @@ def sheet(sheet_name: Optional[str] = typer.Argument(None)):
         set_current_sheet_name(sheet_name)
         console.print(f"Switching to sheet '[bold cyan]{sheet_name}[/bold cyan]'")
     else:
-        # List all sheets
         sheets = get_all_sheets()
         if not sheets:
             console.print("No timesheets created yet. Use 't sheet <name>' to create one.")
@@ -123,12 +120,11 @@ def check_in(note: Optional[str] = typer.Argument(None),
         console.print("[bold red]Error:[/bold red] No current timesheet selected. Use 't sheet <name>' first.")
         raise typer.Exit(code=1)
 
-    # Check for existing running entries in the current sheet and auto-checkout if configured
     running_entries_in_current_sheet = [
         entry for entry in get_running_entries() if entry.sheet_id == current_sheet.id
     ]
     if running_entries_in_current_sheet:
-        # Implement auto_checkout logic here if desired. For now, just warn.
+        
         console.print("[bold yellow]Warning:[/bold yellow] You have a running entry in this sheet. "
                       "Checking in will create a new one.")
 
@@ -169,8 +165,7 @@ def check_out(at: Optional[str] = typer.Option(None, "--at", "-a", help="Specify
         if not running_in_current:
             console.print(f"No running entry found in current sheet '[bold cyan]{current_sheet.name}[/bold cyan]'.")
             return
-        # If multiple running entries in current sheet (shouldn't happen with typical usage but for robustness)
-        # We check out the latest one.
+        
         entries_to_checkout.append(max(running_in_current, key=lambda e: e.start_time))
 
     end_time = parse_time_arg(at) if at else datetime.now()
@@ -229,7 +224,7 @@ def display(
     target_end_time = parse_time_arg(end)
 
     sheets_to_display: List[Sheet] = []
-    if sheet_name == "all" or sheet_name == "full": # 'full' includes archived in original, we'll keep it simple for now
+    if sheet_name == "all" or sheet_name == "full":
         sheets_to_display = get_all_sheets()
     elif sheet_name:
         sheet_obj = get_sheet_by_name(sheet_name)
@@ -306,10 +301,10 @@ def display(
                 # Add daily total
                 table.add_row(
                     Text("Total", style="bold"),
-                    "", "", "", get_duration_str(datetime.min, datetime.min + day_total_duration), # dummy dates
+                    "", "", "", get_duration_str(datetime.min, datetime.min + day_total_duration), 
                     style="bold"
                 )
-                table.add_section() # Adds a separator after each day
+                table.add_section()
 
             table.add_row(
                 Text("Total", style="bold blue"),
@@ -327,7 +322,7 @@ def display(
                 note_str = entry.note.replace('"', '""') if entry.note else ""
                 console.print(f'"{start_str}","{end_str}","{note_str}","{sheet_obj.name}"')
     elif format == "json":
-        # Placeholder for JSON output
+        
         import json
         output_data = []
         for sheet_obj in sheets_to_display:
@@ -373,16 +368,14 @@ def edit_entry(
             console.print(f"[bold red]Error:[/bold red] Entry with ID {id} not found.")
             raise typer.Exit(code=1)
     else:
-        # Try to find running entry first
+        
         running_entries = get_running_entries()
         if running_entries:
-            # Assume the most recent running entry if multiple exist
             target_entry = max(running_entries, key=lambda e: e.start_time)
         else:
-            # If no running, try to find the last checked out entry in the current sheet
             current_sheet = get_current_sheet()
             if current_sheet:
-                entries_in_sheet = get_entries_for_sheet(current_sheet.id) # Get all, then find last
+                entries_in_sheet = get_entries_for_sheet(current_sheet.id) 
                 if entries_in_sheet:
                     target_entry = max(entries_in_sheet, key=lambda e: e.end_time or e.start_time)
             if not target_entry:
@@ -463,9 +456,7 @@ def list_sheets():
     """
     List the available timesheets.
     """
-    sheet(None) # Re-use the sheet command's listing functionality
+    sheet(None) 
 
-
-# --- Main execution ---
 if __name__ == "__main__":
     timetrap_app()

@@ -4,7 +4,7 @@ from typing import List, Optional, Any, Dict, Union
 from datetime import datetime
 from .model import Todo
 
-DATABASE_NAME = "todo_list.db"
+DATABASE_NAME = "src/data/todo_list.db"
 
 def get_db_connection():
     """Establishes and returns a database connection."""
@@ -38,20 +38,12 @@ def create_tables():
         )
     """)
 
-    # --- Schema Migration for Alias Column ---
-    # This is the safe way to add a unique column to an existing table.
-    
-    # 1. Add the column first, without the UNIQUE constraint
     try:
         cursor.execute("ALTER TABLE todos ADD COLUMN alias TEXT")
     except sqlite3.OperationalError as e:
         if "duplicate column name: alias" not in str(e):
-            raise # Re-raise if it's not the expected "column already exists" error
+            raise 
     
-    # 2. Create a unique index on the alias column.
-    # This will fail if there are existing non-NULL duplicate aliases.
-    # If a real-world app, you'd handle duplicates before adding the constraint.
-    # For a CLI tool, it's simpler to assume uniqueness will be managed by app logic.
     try:
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alias ON todos (alias) WHERE alias IS NOT NULL")
     except sqlite3.OperationalError as e:
@@ -101,16 +93,16 @@ def update_todo(todo_id: int, **kwargs: Any) -> bool:
             print(f"[yellow]Warning: Attempted to update non-existent or restricted field: {key}[/yellow]")
             continue
 
-    if not set_clauses: # No valid fields to update
+    if not set_clauses: 
         conn.close()
         return False
 
-    values.append(todo_id) # Add the WHERE clause value
+    values.append(todo_id) 
     
     try:
         cursor.execute(f"UPDATE todos SET {', '.join(set_clauses)} WHERE id = ?", values)
         conn.commit()
-        return cursor.rowcount > 0 # Returns True if any row was updated
+        return cursor.rowcount > 0
     except sqlite3.IntegrityError as e:
         if "UNIQUE constraint failed: todos.alias" in str(e):
             print(f"[red]Error: An item with alias '{kwargs['alias']}' already exists. Please choose a different alias.[/red]")
@@ -165,8 +157,6 @@ def search_todos(keyword: str) -> List[Todo]:
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Using LOWER() for case-insensitive search
-    # Using LIKE with '%' for partial matches
     keyword_like = f"%{keyword.lower()}%"
     
     cursor.execute("""
@@ -200,11 +190,10 @@ def get_todo_by_id_or_alias(identifier: Union[int, str]) -> Optional[Todo]:
         cursor.execute("SELECT * FROM todos WHERE id = ?", (int(identifier),))
         row = cursor.fetchone()
     else:
-        # First try alias
+
         cursor.execute("SELECT * FROM todos WHERE alias = ?", (identifier,))
         row = cursor.fetchone()
 
-        # 🔁 Fallback: try task name if alias not found
         if not row:
             cursor.execute("SELECT * FROM todos WHERE task = ?", (identifier,))
             row = cursor.fetchone()
@@ -224,10 +213,8 @@ def get_todo_by_path_string(path_string: str, all_todos: List[Todo]) -> Optional
 
     for i, part in enumerate(parts):
         found_in_step = None
-        # In each step, filter by parent_id
         potential_todos = [t for t in all_todos if t.parent_id == current_parent_id]
 
-        # Try matching by alias first, then by task name
         for todo in potential_todos:
             if todo.alias and todo.alias.lower() == part.lower():
                 found_in_step = todo
@@ -243,7 +230,6 @@ def get_todo_by_path_string(path_string: str, all_todos: List[Todo]) -> Optional
             target_todo = found_in_step
             current_parent_id = found_in_step.id
         else:
-            # Part of the path not found
             return None
             
     return target_todo
@@ -273,7 +259,6 @@ def refresh_all_recurring_tasks() -> int:
         recurrence = old["recurrence"]
         date_added = datetime.fromisoformat(old["date_added"]).date()
 
-        # Determine if it needs to be refreshed today
         if recurrence == "daily":
             should_create = True
         elif recurrence == "weekly":
@@ -283,10 +268,8 @@ def refresh_all_recurring_tasks() -> int:
         else:
             should_create = False
 
-        # ✅ Don't delete, just archive it
         cursor.execute("UPDATE todos SET status = 'archived' WHERE id = ?", (old["id"],))
 
-        # ✅ Create a new fresh version for today
         if should_create:
             new_task = Todo(
                 task=old["task"],

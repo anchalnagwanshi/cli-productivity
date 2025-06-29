@@ -17,7 +17,7 @@ def play_sound():
         import winsound
         winsound.Beep(1000, 500)
     else:
-        print('\a')  # Most UNIX terminals will beep
+        print('\a') 
 
 MOTIVATIONAL_QUOTES = [
     "Stay focused and keep coding.",
@@ -37,6 +37,7 @@ def start(
     break_every: int = typer.Option(0, "--break-every", help="Take a break every N minutes"),
     break_duration: int = typer.Option(0, "--break-duration", help="Break duration in minutes")
 ):
+    """Starts a focus session with optional breaks."""
     console = Console()
     total_seconds = (hours * 60 + minutes) * 60
 

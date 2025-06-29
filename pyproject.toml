@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prodcli"
+version = "0.1.0" 
+authors = [
+  { name="Anchal Nagwanshi", email="anchalnagwanshi2000@gmail.com" }, 
+]
+description = "A powerful command-line productivity application."
+readme = "README.md" 
+requires-python = ">=3.8" 
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "typer[rich]>=0.9.0", # Ensure Rich is installed with Typer
+    "plyer>=2.1.0",      # For desktop notifications
+    "rich>=13.0.0",      # For rich text and tables
+    "dateparser>=1.2.0", # For natural language date parsing
+    "platformdirs>=3.0.0", # For cross-platform data directories (often a dependency of other libs)
+    "appdirs>=1.4.4"    # Often used for data/config paths
+]
+
+[project.urls]
+"Homepage" = "https://github.com/anchalnagwanshi/cli-productivity.git" 
+
+[project.scripts]
+# This defines your command-line entry point.
+# When you run `prodcli` from the terminal, it will execute the `app` object
+# defined in `src/prodcli.cli` (which is src/prodcli/cli.py).
+prodcli = "prodcli.cli:app"
+
+# For Windows users who might prefer `prodcli.exe`
+# you might also add:
+# prodcli.cmd = "prodcli.cli:app"

@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: prodcli
+Version: 0.1.0
+Summary: A powerful command-line productivity application.
+Author-email: Anchal Nagwanshi <anchalnagwanshi2000@gmail.com>
+Project-URL: Homepage, https://github.com/anchalnagwanshi/cli-productivity.git
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: typer[rich]>=0.9.0
+Requires-Dist: plyer>=2.1.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: dateparser>=1.2.0
+Requires-Dist: platformdirs>=3.0.0
+Requires-Dist: appdirs>=1.4.4

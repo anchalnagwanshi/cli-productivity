@@ -1,0 +1,2 @@
+[console_scripts]
+prodcli = prodcli.cli:app

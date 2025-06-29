@@ -5,26 +5,22 @@ from rich.table import Table
 from rich.text import Text
 from rich import box # For better table borders
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from typing import Optional, List, Dict
+from typing import Optional, List
 from collections import defaultdict
-from TODO.database import delete_past_due_todos, refresh_all_recurring_tasks
-from TODO.database import get_all_todos
-from TODO.database import get_children_of_todo, update_todo
-
-
-from TODO.model import Todo
-from TODO.database import (
+from prodcli.TODO.database import delete_past_due_todos, refresh_all_recurring_tasks
+from prodcli.TODO.database import get_all_todos
+from prodcli.TODO.database import get_children_of_todo, update_todo
+from prodcli.TODO.model import Todo
+from prodcli.TODO.database import (
     create_tables, insert_todo, get_all_todos, delete_todo,
     update_todo, complete_todo, set_status, search_todos, get_children_of_todo,
-    get_todo_by_id_or_alias # Import helper to get task by ID or alias
+    get_todo_by_id_or_alias 
 )
 
 console = Console()
 
 todo_app = typer.Typer(help="A powerful command-line ToDo list application.")
 
-# --- Typer Callback for TODO App Initialization ---
 @todo_app.callback()
 def todo_main_callback():
     """
@@ -42,7 +38,7 @@ def short_date(date_str: Optional[str]) -> str:
         dt = datetime.fromisoformat(date_str)
         return dt.strftime("%d-%m-%Y")
     except ValueError:
-        return date_str # Return as is if not a valid ISO format but not None
+        return date_str 
 
 
 @todo_app.command("add")
@@ -56,7 +52,6 @@ def add_todo(
     alias: Optional[str] = typer.Option(None, "--alias", "-a", help="Optional shortcode/alias for the task. Must be unique.")
 ):
     """Add a new ToDo item."""
-    # Validate due_date format if provided
     if due_date:
         try:
             datetime.fromisoformat(due_date).date()
@@ -70,7 +65,6 @@ def add_todo(
         if parent_todo:
             parent_id = parent_todo.id
 
-            # 🧠 Inherit recurrence if not explicitly set
             if not recurrence and parent_todo.recurrence:
                 recurrence = parent_todo.recurrence
         else:
@@ -117,7 +111,6 @@ def list_todos():
         if todo.recurrence == "daily":
             return True
         elif todo.recurrence == "weekly":
-            # Check if current_date is in the same week or a subsequent week
             start_of_task_week = task_start_date - timedelta(days=task_start_date.weekday())
             start_of_current_week = current_date - timedelta(days=current_date.weekday())
             return start_of_current_week >= start_of_task_week
@@ -125,34 +118,23 @@ def list_todos():
             return current_date.day == task_start_date.day
         return False
 
-    # First pass to identify relevant top-level tasks and build children_map for ALL todos
     temp_children_map = defaultdict(list)
     for todo in all_todos:
         temp_children_map[todo.parent_id].append(todo)
 
-    # Second pass to filter tasks for display and rebuild the children_map for filtered_todos
-    # We need to include parent tasks if any of their children are relevant for today
-    # or if they themselves are relevant.
-    
-    # Keep track of IDs of tasks that should be displayed
     display_todo_ids = set()
 
     for todo in all_todos:
         should_display = False
-        # Rule 1: Pending/In-progress tasks due today
         if (todo.status == "pending" or todo.status == "in-progress") and todo.due_date == today_iso:
             should_display = True
-        # Rule 2: Recurring tasks relevant for today and not completed today
         elif todo.recurrence and is_recurring_today(todo, today_date) and \
              not (todo.status == "done" and todo.date_completed == today_iso):
             should_display = True
-        # Rule 3: Child tasks of a task that should be displayed
-        # This will be handled implicitly by including parents if they are chosen.
-        # For now, we only add top-level or self-relevant tasks.
 
         if should_display:
             display_todo_ids.add(todo.id)
-            if todo.parent_id: # Also ensure parent is displayed if child is displayed
+            if todo.parent_id: 
                 current_id = todo.id
                 while current_id is not None:
                     parent_id = None
@@ -164,20 +146,17 @@ def list_todos():
                         display_todo_ids.add(parent_id)
                         current_id = parent_id
                     else:
-                        current_id = None # Reached a top-level task or no parent
+                        current_id = None 
 
-    # Now, build the final filtered_todos list and their children_map
     for todo in all_todos:
         if todo.id in display_todo_ids:
             filtered_todos.append(todo)
-            # Rebuild children_map specifically for the filtered set
             children_map[todo.parent_id].append(todo)
     
     if not filtered_todos:
         console.print("[yellow]No ToDo items for today.[/yellow]")
         return
 
-    # Sort top-level tasks and their children for consistent display
     for parent_id in children_map:
         children_map[parent_id].sort(key=lambda t: t.id if t.id is not None else float('inf'))
 
@@ -202,23 +181,21 @@ def list_todos():
             task_text = f"{indent}{task.task}"
             row_style = ""
             status_text = Text(task.status.capitalize(), style="white")
-            priority_style = "white" # Default style
+            priority_style = "white" 
 
-            # Apply styles based on status and priority
             if task.status == "done":
                 row_style = "strike dim"
                 status_text = Text("✔ Done", style="green")
             elif task.status == "in-progress":
                 status_text = Text("In Progress", style="blue")
             elif task.status == "pending":
-                # Check if overdue (relevant even for today's list if it's a past-due task *still* due today)
                 if task.due_date:
                     try:
                         if datetime.fromisoformat(task.due_date).date() < datetime.now().date():
-                            row_style = "red bold" # Overdue tasks in red and bold
+                            row_style = "red bold"
                             status_text = Text("Overdue", style="red bold")
                     except ValueError:
-                        pass # Malformed date, treat as regular pending
+                        pass 
 
             if task.priority == "high":
                 priority_style = "bold red"
@@ -234,11 +211,6 @@ def list_todos():
                 id_alias_display = f"{indent}↳"
             else:
                 id_alias_display = "•"
-            # Indent children's ID/Alias
-
-            
-            # Child tasks get "-" for Due, Priority, Repeat columns by default
-            # For child tasks, priority, due_date, and recurrence are usually inherited or not relevant
             priority_display = safe_priority
             due_display = short_date(task.due_date) if task.due_date else "-"
             repeat_display = task.recurrence or "-"
@@ -246,7 +218,7 @@ def list_todos():
 
 
             table.add_row(
-                Text(id_alias_display, style=row_style), # Idx/Alias column
+                Text(id_alias_display, style=row_style), 
                 Text(task_text, style=row_style),
                 Text(due_display, style=row_style),
                 Text(priority_display, style=priority_style),
@@ -255,11 +227,9 @@ def list_todos():
                 Text(repeat_display, style=row_style)
             )
             
-            # Recursively call for children of the current task
             if task.id in children_map and children_map[task.id]:
                 add_task_rows_recursive(children_map[task.id], level + 1)
     
-    # Start the recursive display from top-level tasks (those with parent_id is None)
     top_level_tasks = children_map[None]
     add_task_rows_recursive(top_level_tasks)
 
@@ -326,7 +296,6 @@ def update_todo_command(
         update_todo(todo_obj.id, **update_params)
         console.print(f"[green]ToDo '{identifier}' updated successfully.[/green]")
 
-        # ✅ If priority or recurrence was updated, propagate to children
         updated_fields = {"priority", "recurrence"}
         if updated_fields.intersection(update_params.keys()):
             children = get_children_of_todo(todo_obj.id)
@@ -440,7 +409,7 @@ def search_todos_command(keyword: str = typer.Argument(..., help="Keyword to sea
     table.add_column("Repeat", justify="center")
 
     children_map = defaultdict(list)
-    for todo in results: # Only map children that are *in the search results*
+    for todo in results: 
         children_map[todo.parent_id].append(todo)
 
     def add_task_rows_recursive_search(tasks: List[Todo], level: int = 0):
@@ -494,18 +463,14 @@ def search_todos_command(keyword: str = typer.Argument(..., help="Keyword to sea
                 Text(repeat_display, style=row_style)
             )
             
-            # Only add children that were also found in the search results
+        
             if task.id in children_map and children_map[task.id]:
                 add_task_rows_recursive_search(children_map[task.id], level + 1)
     
-    # Filter top-level tasks from search results
     top_level_search_results = [t for t in results if t.parent_id is None]
     add_task_rows_recursive_search(top_level_search_results)
 
     console.print(table)
 
-
-# This __main__ block is for direct execution of this script, typically for dev/testing.
-# In a real CLI, it would be run via `python -m your_package_name` or similar.
 if __name__ == "__main__":
     todo_app()
