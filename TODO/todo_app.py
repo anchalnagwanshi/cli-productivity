@@ -1,16 +1,23 @@
-# TODO/todo_app.py
+# TODO/todo_app.py - MODIFIED
 import typer
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+from rich import box # For better table borders
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
-from typing import Optional, List
+from typing import Optional, List, Dict
+from collections import defaultdict
+from TODO.database import delete_past_due_todos, refresh_all_recurring_tasks
+from TODO.database import get_all_todos
+from TODO.database import get_children_of_todo, update_todo
+
 
 from TODO.model import Todo
 from TODO.database import (
     create_tables, insert_todo, get_all_todos, delete_todo,
-    update_todo, complete_todo, set_status, search_todos
+    update_todo, complete_todo, set_status, search_todos, get_children_of_todo,
+    get_todo_by_id_or_alias # Import helper to get task by ID or alias
 )
 
 console = Console()
@@ -28,453 +35,477 @@ def todo_main_callback():
 
 
 def short_date(date_str: Optional[str]) -> str:
-    """Convert ISO datetime to DD-MM-YYYY format, handles None gracefully."""
-    if date_str is None: # Check for Python None explicitly
-        return "-"
-    if date_str == 'None': # Handle the string 'None' that might come from older DB entries
+    """Convert ISO datetime to DD-MM-YYYY format, handles None/string 'None' gracefully."""
+    if date_str is None or date_str == 'None':
         return "-"
     try:
         dt = datetime.fromisoformat(date_str)
         return dt.strftime("%d-%m-%Y")
     except ValueError:
-        try: # Try parsing only the date part if full iso fails
-            dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
-            return dt.strftime("%d-%m-%Y")
+        return date_str # Return as is if not a valid ISO format but not None
+
+
+@todo_app.command("add")
+def add_todo(
+    task: str = typer.Argument(..., help="The description of the ToDo item."),
+    priority: str = typer.Option("medium", "--priority", "-p", help="Priority of the task (low, medium, high)."),
+    due_date: Optional[str] = typer.Option(None, "--due", "-d", help="Due date (YYYY-MM-DD)."),
+    status: str = typer.Option("pending", "--status", "-s", help="Status of the task (pending, in-progress, done)."),
+    recurrence: Optional[str] = typer.Option(None, "--repeat", "-r", help="Recurrence pattern (daily, weekly, monthly)."),
+    parent_identifier: Optional[str] = typer.Option(None, "--parent", "-P", help="ID or alias of parent task."),
+    alias: Optional[str] = typer.Option(None, "--alias", "-a", help="Optional shortcode/alias for the task. Must be unique.")
+):
+    """Add a new ToDo item."""
+    # Validate due_date format if provided
+    if due_date:
+        try:
+            datetime.fromisoformat(due_date).date()
         except ValueError:
-            return "-" # Return hyphen for unparseable dates
+            console.print("[red]Error: Due date must be in YYYY-MM-DD format.[/red]")
+            raise typer.Exit(code=1)
+
+    parent_id = None
+    if parent_identifier:
+        parent_todo = get_todo_by_id_or_alias(parent_identifier)
+        if parent_todo:
+            parent_id = parent_todo.id
+
+            # 🧠 Inherit recurrence if not explicitly set
+            if not recurrence and parent_todo.recurrence:
+                recurrence = parent_todo.recurrence
+        else:
+            console.print(f"[yellow]Warning: Parent task '{parent_identifier}' not found. Adding as a top-level task.[/yellow]")
 
 
-@todo_app.command()
-def add(
-    task: str = typer.Option(...,
-        prompt="Task",
-        help="The detailed description of the task to be added. This is a required field."
-    ),
-    priority: str = typer.Option("medium",
-        prompt="Priority (low/medium/high)",
-        show_choices=True,
-        help="The priority level of the task. Choose from 'low', 'medium', or 'high'. Defaults to 'medium'."
-    ),
-    due: Optional[str] = typer.Option(None,
-        prompt="Due Date (YYYY-MM-DD or type 'none')", # Updated prompt
-        show_default=False,
-        help="The due date for the task in YYYY-MM-DD format. Type 'none' if no due date."
-    ),
-    status: str = typer.Option("pending",
-        prompt="Status (pending/in-progress/done)",
-        show_choices=True,
-        help="The initial status of the task. Choose from 'pending', 'in-progress', or 'done'. Defaults to 'pending'."
-    ),
-    repeat: Optional[str] = typer.Option(None,
-        prompt="Repeat (daily/weekly/monthly/none)",
-        show_default=False,
-        help="Sets a recurrence pattern for the task. Choose from 'daily', 'weekly', 'monthly', or 'none'. Type 'none' for no repeat."
+    new_todo = Todo(
+        task=task,
+        priority=priority,
+        due_date=due_date,
+        status=status,
+        date_added=datetime.now().date().isoformat(),
+        recurrence=recurrence,
+        parent_id=parent_id,
+        alias=alias
     )
-):
+    insert_todo(new_todo)
+    console.print(f"[green]Added ToDo: '{new_todo.task}'[/green]")
+
+
+@todo_app.command("list")
+def list_todos():
     """
-    Adds a new task to your ToDo list.
-
-    This command allows you to specify the task description, priority,
-    due date, initial status, and an optional recurrence pattern.
+    List today's ToDo items.
+    Only shows tasks that are pending or in-progress and due today,
+    or recurring tasks relevant for today that are not yet done.
     """
-    # Manual validation and normalization
-    priority = priority.lower().strip()
-    if priority not in ["low", "medium", "high"]:
-        console.print("[bold red]Error:[/bold red] Invalid priority. Please choose from: [green]low[/green], [yellow]medium[/yellow], [red]high[/red].")
-        raise typer.Exit(code=1)
+    all_todos = [t for t in get_all_todos() if t.status != "archived"]
+    today_iso = datetime.now().date().isoformat()
+    today_date = datetime.now().date()
 
-    status = status.lower().strip()
-    if status not in ["pending", "in-progress", "done"]:
-        console.print("[bold red]Error:[/bold red] Invalid status. Please choose from: [blue]pending[/blue], [yellow]in-progress[/yellow], [green]done[/green].")
-        raise typer.Exit(code=1)
-
-    repeat = repeat.lower().strip() if repeat else None # Convert empty string to None
-    if repeat == 'none': # User might type 'none' to signify no repeat
-        repeat = None
-    if repeat not in [None, "daily", "weekly", "monthly"]:
-        console.print("[bold red]Error:[/bold red] Invalid recurrence. Choose from: [cyan]daily[/cyan], [cyan]weekly[/cyan], [cyan]monthly[/cyan], or type 'none'.")
-        raise typer.Exit(code=1)
-
-    # --- Start of fix for 'Due Date' handling ---
-    parsed_due_date = None
-    if due: # If user provided any input for 'due'
-        stripped_due = due.lower().strip()
-        if stripped_due == "none" or stripped_due == "leave blank": # Explicitly check for "none" or "leave blank"
-            parsed_due_date = None
-        else:
-            try:
-                # Ensure due is YYYY-MM-DD format and convert to ISO for consistency
-                parsed_due_date = datetime.strptime(due, "%Y-%m-%d").date().isoformat()
-            except ValueError:
-                console.print("[bold red]Error:[/bold red] Invalid due date format. Please use YYYY-MM-DD or type 'none' to leave blank.")
-                raise typer.Exit(code=1)
-    # --- End of fix for 'Due Date' handling ---
-
-    created_date = datetime.today().date().isoformat()
-    console.print(f"Adding task: '[bold green]{task}[/bold green]' with priority [bold {priority}]{priority}[/bold {priority}], due by {parsed_due_date or 'N/A'}, status [bold {status}]{status}[/bold {status}], repeating {repeat or 'none'}.")
+    filtered_todos = []
+    children_map = defaultdict(list)
     
-    todo = Todo(task=task, priority=priority, due_date=parsed_due_date, status=status, date_added=created_date, recurrence=repeat)
-    insert_todo(todo)
-    show()
-
-@todo_app.command()
-def delete(position: int = typer.Argument(..., help="The #ID of the task to delete (as shown in 'todo show').")):
-    """
-    Deletes a task from your ToDo list by its position.
-    This action is irreversible. The position refers to the #ID column in 'todo show'.
-    """
-    all_todos = get_all_todos()
-    if 0 < position <= len(all_todos) and all_todos[position-1].id is not None:
-        todo_id = all_todos[position-1].id
-        if delete_todo(todo_id):
-            console.print(f"Task at position [bold yellow]{position}[/bold yellow] (ID: {todo_id}) deleted.")
-        else:
-            console.print(f"[bold red]Error:[/bold red] Task at position [bold yellow]{position}[/bold yellow] (ID: {todo_id}) not found or could not be deleted.")
-    else:
-        console.print("[bold red]Error:[/bold red] Invalid task position or task not found.")
-        raise typer.Exit(code=1)
-    show()
-
-@todo_app.command()
-def update(
-    position: int = typer.Argument(..., help="The #ID of the task to update."),
-    task: Optional[str] = typer.Option(None, help="New task description."),
-    priority: Optional[str] = typer.Option(None, help="New priority (low/medium/high)."),
-    due: Optional[str] = typer.Option(None, help="New due date (YYYY-MM-DD). Set to 'none' to clear."),
-    status: Optional[str] = typer.Option(None, help="New status (pending/in-progress/done)."),
-    repeat: Optional[str] = typer.Option(None, help="New recurrence pattern (daily/weekly/monthly/none). Set to 'none' to remove recurrence.")
-):
-    """
-    Updates an existing task by its position.
-
-    You can update the task description, priority, due date, status, or recurrence.
-    Only provided options will be updated.
-    The position refers to the #ID column in 'todo show'.
-    """
-    all_todos = get_all_todos()
-    if not (0 < position <= len(all_todos) and all_todos[position-1].id is not None):
-        console.print("[bold red]Error:[/bold red] Invalid task position or task not found.")
-        raise typer.Exit(code=1)
-
-    todo_to_update = all_todos[position - 1]
-    todo_id = todo_to_update.id
-
-    # Validate inputs before attempting update
-    update_params = {}
-
-    if task is not None:
-        update_params['task'] = task
-
-    if priority is not None:
-        priority_lower = priority.lower().strip()
-        if priority_lower not in ["low", "medium", "high"]:
-            console.print("[bold red]Error:[/bold red] Invalid priority. Not updating.")
-            raise typer.Exit(code=1)
-        update_params['priority'] = priority_lower
-    
-    if status is not None:
-        status_lower = status.lower().strip()
-        if status_lower not in ["pending", "in-progress", "done"]:
-            console.print("[bold red]Error:[/bold red] Invalid status. Not updating.")
-            raise typer.Exit(code=1)
-        update_params['status'] = status_lower
-        # If status is set to done, record completion date; otherwise, clear it
-        if status_lower == "done":
-            update_params['date_completed'] = datetime.today().date().isoformat()
-        elif todo_to_update.date_completed is not None: # Only clear if it currently has a date
-            update_params['date_completed'] = None
-    
-    if due is not None:
-        if due.lower().strip() == 'none': # Special string to clear the due date
-            update_params['due_date'] = None
-        else:
-            try:
-                # Ensure due is YYYY-MM-DD format and convert to ISO for consistency
-                update_params['due_date'] = datetime.strptime(due, "%Y-%m-%d").date().isoformat()
-            except ValueError:
-                console.print("[bold red]Error:[/bold red] Invalid due date format. Please use YYYY-MM-DD or type 'none' to clear. Not updating.")
-                raise typer.Exit(code=1)
-
-    if repeat is not None:
-        repeat_lower = repeat.lower().strip()
-        if repeat_lower == 'none': # User typed 'none' to signify no repeat
-            update_params['recurrence'] = None
-        elif repeat_lower not in ["daily", "weekly", "monthly"]:
-            console.print("[bold red]Error:[/bold red] Invalid recurrence. Choose from: [cyan]daily[/cyan], [cyan]weekly[/cyan], [cyan]monthly[/cyan], or 'none'. Not updating.")
-            raise typer.Exit(code=1)
-        else:
-            update_params['recurrence'] = repeat_lower
+    # Helper to check if a recurring task is relevant for today
+    def is_recurring_today(todo: Todo, current_date: datetime.date) -> bool:
+        if not todo.recurrence:
+            return False
         
-    if not update_params:
-        console.print("[bold yellow]Warning:[/bold yellow] No update options provided.")
-        raise typer.Exit()
+        task_start_date = datetime.fromisoformat(todo.date_added).date()
+        if current_date < task_start_date:
+            return False
 
-    # Perform update using database function
-    updated = update_todo(todo_id=todo_id, **update_params)
+        if todo.recurrence == "daily":
+            return True
+        elif todo.recurrence == "weekly":
+            # Check if current_date is in the same week or a subsequent week
+            start_of_task_week = task_start_date - timedelta(days=task_start_date.weekday())
+            start_of_current_week = current_date - timedelta(days=current_date.weekday())
+            return start_of_current_week >= start_of_task_week
+        elif todo.recurrence == "monthly":
+            return current_date.day == task_start_date.day
+        return False
+
+    # First pass to identify relevant top-level tasks and build children_map for ALL todos
+    temp_children_map = defaultdict(list)
+    for todo in all_todos:
+        temp_children_map[todo.parent_id].append(todo)
+
+    # Second pass to filter tasks for display and rebuild the children_map for filtered_todos
+    # We need to include parent tasks if any of their children are relevant for today
+    # or if they themselves are relevant.
     
-    if updated:
-        console.print(f"Task at position [bold green]{position}[/bold green] (ID: {todo_id}) updated.")
-    else:
-        console.print(f"[bold yellow]Warning:[/bold yellow] No changes applied or task not found at position [bold yellow]{position}[/bold yellow] (ID: {todo_id}).")
-    show()
+    # Keep track of IDs of tasks that should be displayed
+    display_todo_ids = set()
 
-@todo_app.command()
-def complete(position: int = typer.Argument(..., help="The #ID of the task to mark as complete.")):
-    """
-    Marks a task as complete by its position.
+    for todo in all_todos:
+        should_display = False
+        # Rule 1: Pending/In-progress tasks due today
+        if (todo.status == "pending" or todo.status == "in-progress") and todo.due_date == today_iso:
+            should_display = True
+        # Rule 2: Recurring tasks relevant for today and not completed today
+        elif todo.recurrence and is_recurring_today(todo, today_date) and \
+             not (todo.status == "done" and todo.date_completed == today_iso):
+            should_display = True
+        # Rule 3: Child tasks of a task that should be displayed
+        # This will be handled implicitly by including parents if they are chosen.
+        # For now, we only add top-level or self-relevant tasks.
 
-    This sets the task's status to 'done' and records the completion date.
-    The position refers to the #ID column in 'todo show'.
-    """
-    all_todos = get_all_todos()
-    if 0 < position <= len(all_todos) and all_todos[position-1].id is not None:
-        todo_id = all_todos[position-1].id
-        complete_todo(todo_id)
-        console.print(f"Task at position [bold green]{position}[/bold green] (ID: {todo_id}) marked as [bold green]done[/bold green].")
-    else:
-        console.print("[bold red]Error:[/bold red] Invalid task position or task not found.")
-        raise typer.Exit(code=1)
-    show()
+        if should_display:
+            display_todo_ids.add(todo.id)
+            if todo.parent_id: # Also ensure parent is displayed if child is displayed
+                current_id = todo.id
+                while current_id is not None:
+                    parent_id = None
+                    for t in all_todos:
+                        if t.id == current_id and t.parent_id is not None:
+                            parent_id = t.parent_id
+                            break
+                    if parent_id is not None:
+                        display_todo_ids.add(parent_id)
+                        current_id = parent_id
+                    else:
+                        current_id = None # Reached a top-level task or no parent
 
-@todo_app.command()
-def setstatus(
-    position: int = typer.Argument(..., help="The #ID of the task to change status for."),
-    status: str = typer.Argument(..., help="The new status (pending/in-progress/done).", show_choices=True)
-):
-    """
-    Sets the status of a task.
-
-    You can set the task's status to 'pending', 'in-progress', or 'done'.
-    The position refers to the #ID column in 'todo show'.
-    """
-    status_lower = status.lower().strip()
-    if status_lower not in ["pending", "in-progress", "done"]:
-        console.print("[bold red]Error:[/bold red] Invalid status. Please choose from: [blue]pending[/blue], [yellow]in-progress[/yellow], [green]done[/green].")
-        raise typer.Exit(code=1)
+    # Now, build the final filtered_todos list and their children_map
+    for todo in all_todos:
+        if todo.id in display_todo_ids:
+            filtered_todos.append(todo)
+            # Rebuild children_map specifically for the filtered set
+            children_map[todo.parent_id].append(todo)
     
-    all_todos = get_all_todos()
-    if 0 < position <= len(all_todos) and all_todos[position-1].id is not None:
-        todo_id = all_todos[position-1].id
-        set_status(todo_id, status_lower)
-        console.print(f"Task at position [bold green]{position}[/bold green] (ID: {todo_id}) status set to [bold {status_lower}]{status_lower}[/bold {status_lower}].")
-    else:
-        console.print("[bold red]Error:[/bold red] Invalid task position or task not found.")
-        raise typer.Exit(code=1)
-    show()
-
-@todo_app.command()
-def show():
-    """
-    Displays all tasks in your ToDo list.
-
-    This provides a comprehensive view of all your tasks, regardless of their status.
-    """
-    tasks = get_all_todos()
-    display_todos(tasks)
-
-@todo_app.command()
-def search(keyword: str = typer.Argument(..., help="Keyword to search for in task, priority, due date, status, or recurrence.")):
-    """
-    Search tasks by keyword.
-
-    Finds tasks where the keyword appears in the task description, priority, due date, status, or recurrence.
-    """
-    results = search_todos(keyword)
-    if not results:
-        console.print(f"No matching tasks found for keyword '[italic]{keyword}[/italic]'.")
-    else:
-        console.print(f"Found [bold green]{len(results)}[/bold green] matching task(s) for '[italic]{keyword}[/italic]':")
-        display_todos(results)
-
-@todo_app.command()
-def repeat():
-    """
-    Generates new instances of recurring tasks.
-
-    It checks for tasks marked 'done' with a recurrence pattern and creates new pending tasks for their next due date.
-    This helps in automating repetitive task management.
-    """
-    tasks = get_all_todos()
-    today = datetime.today().date()
-    generated_count = 0
-
-    for task in tasks:
-        if task.status == "done" and task.recurrence and task.recurrence.lower() != "none":
-            # Determine base date
-            base_str = task.date_completed or task.date_added
-            try:
-                base_date = datetime.fromisoformat(base_str).date()
-            except Exception:
-                console.print(f"[yellow]⚠ Could not parse date for task: {task.task}[/yellow]")
-                continue
-
-            # Get next due date
-            if task.recurrence == "daily":
-                next_due = base_date + timedelta(days=1)
-            elif task.recurrence == "weekly":
-                next_due = base_date + timedelta(weeks=1)
-            elif task.recurrence == "monthly":
-                next_due = base_date + relativedelta(months=1)
-            else:
-                continue
-
-            # Make sure next due date is not in the past
-            while next_due < today:
-                if task.recurrence == "daily":
-                    next_due += timedelta(days=1)
-                elif task.recurrence == "weekly":
-                    next_due += timedelta(weeks=1)
-                elif task.recurrence == "monthly":
-                    next_due += relativedelta(months=1)
-
-            # Prevent duplicate future/pending tasks
-            duplicate = False
-            for existing in tasks:
-                if (
-                    existing.task == task.task and
-                    existing.status != "done" and
-                    existing.recurrence == task.recurrence
-                ):
-                    if existing.due_date:
-                        try:
-                            existing_due = datetime.fromisoformat(existing.due_date).date()
-                            if existing_due >= next_due:
-                                duplicate = True
-                                break
-                        except Exception:
-                            pass
-
-            if duplicate:
-                continue
-
-            # Create new task
-            new_task = Todo(
-                task=task.task,
-                priority=task.priority,
-                due_date=next_due.isoformat(),
-                date_added=next_due.isoformat(),  # ✅ ensures calendar/week shows correctly
-                status="pending",
-                recurrence=task.recurrence
-            )
-            insert_todo(new_task)
-            generated_count += 1
-            console.print(f"[green]✓ New task generated:[/green] {new_task.task} → [yellow]{next_due.isoformat()}[/yellow]")
-
-    if generated_count == 0:
-        console.print("[cyan]No recurring tasks generated.[/cyan]")
-    else:
-        console.print(f"[bold green]{generated_count}[/bold green] task(s) added.")
-
-    show()
-
-@todo_app.command("now")
-def show_now_todos():
-    """
-    Displays tasks that are currently 'in-progress' or 'pending' and due today/overdue.
-
-    This provides a quick overview of what you should be focusing on right now.
-    """
-    all_tasks = get_all_todos()
-    now_tasks: List[Todo] = []
-    today = datetime.today().date()
-
-    for task in all_tasks:
-        if task.status == "in-progress":
-            now_tasks.append(task)
-        elif task.status == "pending":
-            if task.due_date:
-                try:
-                    # Parse due_date in ISO format, then compare
-                    due_date_dt = datetime.fromisoformat(task.due_date).date()
-                    if due_date_dt <= today: # Due today or overdue
-                        now_tasks.append(task)
-                except ValueError:
-                    # Ignore tasks with unparseable due dates that might come from older DB entries
-                    pass
-            else: # If a pending task has no due date, it's always 'now' for consideration
-                now_tasks.append(task)
-    
-    if not now_tasks:
-        console.print("No tasks currently [bold yellow]in-progress[/bold yellow] or [bold blue]pending[/bold blue] and [bold red]due today/overdue[/bold red]. You're all caught up!")
-        return
-    
-    # Sort tasks: in-progress first, then by priority (high, medium, low), then by due date
-    now_tasks.sort(key=lambda t: (
-        0 if t.status == "in-progress" else 1, # In-progress first (0)
-        {"high": 0, "medium": 1, "low": 2}.get(t.priority.lower(), 3), # Priority order (0, 1, 2, 3)
-        # Handle cases where due_date might be None (or "None" string, though short_date fixes that)
-        datetime.fromisoformat(t.due_date).date() if t.due_date and t.due_date != 'None' else datetime.max.date() # Earliest due first
-    ))
-
-    console.print("[bold green]Tasks for now:[/bold green]")
-    display_todos(now_tasks)
-
-
-def display_todos(tasks: List[Todo]):
-    """
-    Helper function to display a list of Todo objects in a Rich table.
-    """
-    if not tasks:
-        console.print("No tasks to display.")
+    if not filtered_todos:
+        console.print("[yellow]No ToDo items for today.[/yellow]")
         return
 
-    table = Table(show_header=True, header_style="bold blue")
-    table.add_column("#", width=4)
-    table.add_column("Task", style="bold")
-    table.add_column("Due", justify="center")
+    # Sort top-level tasks and their children for consistent display
+    for parent_id in children_map:
+        children_map[parent_id].sort(key=lambda t: t.id if t.id is not None else float('inf'))
+
+    table = Table(
+        title=f"[bold cyan]Your ToDo List for Today ({today_iso})[/bold cyan]",
+        show_header=True,
+        header_style="bold magenta",
+        box=box.ROUNDED,
+        show_lines=True
+    )
+    table.add_column("ID / Alias", justify="center", style="dim")
+    table.add_column("Task", justify="left")
+    table.add_column("Due Date", justify="center")
     table.add_column("Priority", justify="center")
     table.add_column("Status", justify="center")
-    table.add_column("Date Added", justify="center")
+    table.add_column("Added Date", justify="center")
     table.add_column("Repeat", justify="center")
 
-    # Style helper
-    def apply_style(text: str, style: str) -> str:
-        return f"[{style}]{text}[/{style}]" if style else text
+    def add_task_rows_recursive(tasks: List[Todo], level: int = 0):
+        for task in tasks:
+            indent = "  " * level
+            task_text = f"{indent}{task.task}"
+            row_style = ""
+            status_text = Text(task.status.capitalize(), style="white")
+            priority_style = "white" # Default style
 
-    # Color mapping
-    priority_colors = {"low": "green", "medium": "yellow", "high": "red"}
-    status_colors = {"pending": "blue", "in-progress": "yellow", "done": "green"}
-    status_icons = {"pending": "🕒", "in-progress": "🔄", "done": "✅"}
+            # Apply styles based on status and priority
+            if task.status == "done":
+                row_style = "strike dim"
+                status_text = Text("✔ Done", style="green")
+            elif task.status == "in-progress":
+                status_text = Text("In Progress", style="blue")
+            elif task.status == "pending":
+                # Check if overdue (relevant even for today's list if it's a past-due task *still* due today)
+                if task.due_date:
+                    try:
+                        if datetime.fromisoformat(task.due_date).date() < datetime.now().date():
+                            row_style = "red bold" # Overdue tasks in red and bold
+                            status_text = Text("Overdue", style="red bold")
+                    except ValueError:
+                        pass # Malformed date, treat as regular pending
 
-    for idx, task in enumerate(tasks, start=1):
-        safe_priority = task.priority if isinstance(task.priority, str) else "medium"
-        safe_status = task.status if isinstance(task.status, str) else "pending"
+            if task.priority == "high":
+                priority_style = "bold red"
+            elif task.priority == "medium":
+                priority_style = "yellow"
+            elif task.priority == "low":
+                priority_style = "green"
+            
+            safe_priority = task.priority.capitalize() if task.priority else "Medium"
 
-        priority_style = priority_colors.get(safe_priority.lower(), "white")
-        status_style = status_colors.get(safe_status.lower(), "white")
-        status_text = apply_style(f"{status_icons.get(safe_status, '')} {safe_status}", status_style)
 
-        # Row highlight
-        row_style = ""
-        if safe_status == "done":
-            row_style = "dim"
-        elif safe_status == "in-progress":
-            row_style = "bold yellow"
-        elif safe_status == "pending" and task.due_date:
-            try:
-                due_date_dt = datetime.fromisoformat(task.due_date).date()
-                today = datetime.today().date()
-                if due_date_dt < today:
-                    row_style = "bold red"
-                elif due_date_dt == today:
-                    row_style = "bold magenta"
-            except ValueError:
-                pass
+            if task.parent_id:
+                id_alias_display = f"{indent}↳"
+            else:
+                id_alias_display = "•"
+            # Indent children's ID/Alias
 
-        table.add_row(
-            apply_style(str(idx), row_style),
-            apply_style(task.task, row_style),
-            apply_style(short_date(task.due_date), row_style),
-            apply_style(safe_priority, priority_style),
-            status_text,
-            apply_style(short_date(task.date_added), row_style),
-            apply_style(task.recurrence or "-", row_style),
-        )
+            
+            # Child tasks get "-" for Due, Priority, Repeat columns by default
+            # For child tasks, priority, due_date, and recurrence are usually inherited or not relevant
+            priority_display = safe_priority
+            due_display = short_date(task.due_date) if task.due_date else "-"
+            repeat_display = task.recurrence or "-"
+
+
+
+            table.add_row(
+                Text(id_alias_display, style=row_style), # Idx/Alias column
+                Text(task_text, style=row_style),
+                Text(due_display, style=row_style),
+                Text(priority_display, style=priority_style),
+                status_text,
+                Text(short_date(task.date_added), style=row_style),
+                Text(repeat_display, style=row_style)
+            )
+            
+            # Recursively call for children of the current task
+            if task.id in children_map and children_map[task.id]:
+                add_task_rows_recursive(children_map[task.id], level + 1)
+    
+    # Start the recursive display from top-level tasks (those with parent_id is None)
+    top_level_tasks = children_map[None]
+    add_task_rows_recursive(top_level_tasks)
 
     console.print(table)
 
-# This __main__ block is for direct testing of todo_app.py if needed,
-# but the primary way to run is via main.py.
+
+@todo_app.command("update")
+def update_todo_command(
+    identifier: str = typer.Argument(..., help="The ID or alias of the ToDo to update."),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="New task description."),
+    priority: Optional[str] = typer.Option(None, "--priority", "-p", help="New priority (low, medium, high)."),
+    due_date: Optional[str] = typer.Option(None, "--due", "-d", help="New due date (YYYY-MM-DD). Set to 'none' to clear."),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="New status (pending, in-progress, done)."),
+    recurrence: Optional[str] = typer.Option(None, "--repeat", "-r", help="New recurrence pattern (daily, weekly, monthly). Set to 'none' to clear."),
+    parent_identifier: Optional[str] = typer.Option(None, "--parent", "-P", help="ID or alias of parent task. Set to 'none' to clear parent."),
+    alias: Optional[str] = typer.Option(None, "--alias", "-a", help="New alias for the task. Set to 'none' to clear.")
+):
+    """Update an existing ToDo item by its ID or alias."""
+    todo_obj = get_todo_by_id_or_alias(identifier)
+    if not todo_obj:
+        console.print(f"[red]Error: ToDo '{identifier}' not found.[/red]")
+        raise typer.Exit(code=1)
+
+    update_params = {}
+    if task is not None:
+        update_params["task"] = task
+    if priority is not None:
+        update_params["priority"] = priority
+    if due_date is not None:
+        if due_date.lower() == 'none':
+            update_params["due_date"] = None
+        else:
+            try:
+                datetime.fromisoformat(due_date).date()
+                update_params["due_date"] = due_date
+            except ValueError:
+                console.print("[red]Error: Due date must be in YYYY-MM-DD format or 'none'.[/red]")
+                raise typer.Exit(code=1)
+    if status is not None:
+        update_params["status"] = status
+    if recurrence is not None:
+        if recurrence.lower() == 'none':
+            update_params["recurrence"] = None
+        else:
+            update_params["recurrence"] = recurrence
+    if alias is not None:
+        if alias.lower() == 'none':
+            update_params["alias"] = None
+        else:
+            update_params["alias"] = alias
+    
+    if parent_identifier is not None:
+        if parent_identifier.lower() == 'none':
+            update_params["parent_id"] = None
+        else:
+            parent_todo = get_todo_by_id_or_alias(parent_identifier)
+            if parent_todo:
+                update_params["parent_id"] = parent_todo.id
+            else:
+                console.print(f"[yellow]Warning: Parent task '{parent_identifier}' not found. Parent ID not updated.[/yellow]")
+
+    if update_params:
+    # Update the parent task
+        update_todo(todo_obj.id, **update_params)
+        console.print(f"[green]ToDo '{identifier}' updated successfully.[/green]")
+
+        # ✅ If priority or recurrence was updated, propagate to children
+        updated_fields = {"priority", "recurrence"}
+        if updated_fields.intersection(update_params.keys()):
+            children = get_children_of_todo(todo_obj.id)
+            if children:
+                for child in children:
+                    child_updates = {}
+                    if "priority" in update_params:
+                        child_updates["priority"] = update_params["priority"]
+                    if "recurrence" in update_params:
+                        child_updates["recurrence"] = update_params["recurrence"]
+
+                    if child_updates:
+                        update_todo(child.id, **child_updates)
+
+                console.print(f"[yellow]{len(children)} child task(s) updated to match parent.[/yellow]")
+    else:
+        console.print("[yellow]No updates provided.[/yellow]")
+
+
+
+@todo_app.command("complete")
+def complete_todo_command(
+    identifier: str = typer.Argument(..., help="The ID or alias of the ToDo to mark as complete."),
+):
+    """Mark a ToDo as complete by its ID or alias."""
+    todo_obj = get_todo_by_id_or_alias(identifier)
+    if not todo_obj:
+        console.print(f"[red]Error: ToDo '{identifier}' not found.[/red]")
+        raise typer.Exit(code=1)
+    
+    if todo_obj.status == "done":
+        console.print(f"[yellow]ToDo '{todo_obj.task}' is already marked as complete.[/yellow]")
+        raise typer.Exit(code=0)
+
+    complete_todo(todo_obj.id)
+    console.print(f"[green]ToDo '{todo_obj.task}' marked as complete.[/green]")
+
+
+@todo_app.command("status")
+def set_status_command(
+    identifier: str = typer.Argument(..., help="The ID or alias of the ToDo to update."),
+    status: str = typer.Argument(..., help="New status (pending, in-progress, done).")
+):
+    """Set the status of a ToDo item by its ID or alias."""
+    todo_obj = get_todo_by_id_or_alias(identifier)
+    if not todo_obj:
+        console.print(f"[red]Error: ToDo '{identifier}' not found.[/red]")
+        raise typer.Exit(code=1)
+    
+    set_status(todo_obj.id, status)
+    console.print(f"[green]Status for ToDo '{todo_obj.task}' set to '{status}'.[/green]")
+
+
+@todo_app.command("delete")
+def delete_todo_command(
+    identifier: str = typer.Argument(..., help="The ID or alias of the ToDo to delete."),
+):
+    """Delete a ToDo item by its ID or alias."""
+    todo_obj = get_todo_by_id_or_alias(identifier)
+    if not todo_obj:
+        console.print(f"[red]Error: ToDo '{identifier}' not found.[/red]")
+        raise typer.Exit(code=1)
+
+    delete_todo(todo_obj.id)
+    console.print(f"[green]ToDo '{todo_obj.task}' (ID: {todo_obj.id}) deleted successfully.[/green]")
+
+@todo_app.command("clean")
+def clean_past_due_tasks():
+    """
+    Delete past-due non-recurring tasks and refresh recurring tasks for today.
+    """
+    deleted = delete_past_due_todos()
+    refreshed = refresh_all_recurring_tasks()
+
+    if deleted:
+        console.print(f"[green]Deleted {deleted} past-due non-recurring task(s).[/green]")
+    else:
+        console.print("[yellow]No non-recurring past-due tasks found.[/yellow]")
+
+    if refreshed:
+        console.print(f"[green]Refreshed {refreshed} recurring task(s) (daily/weekly/monthly) for today.[/green]")
+    else:
+        console.print("[yellow]No outdated recurring tasks found.[/yellow]")
+
+
+
+@todo_app.command("search")
+def search_todos_command(keyword: str = typer.Argument(..., help="Keyword to search in tasks, priority, status, recurrence, or alias.")):
+    """Search for ToDo items by a keyword."""
+    results = search_todos(keyword)
+    if not results:
+        console.print(f"[yellow]No tasks found matching '{keyword}'.[/yellow]")
+        return
+    
+    # Reuse list_todos's rendering logic (or part of it) for search results
+    console.print(f"[bold blue]Search Results for '{keyword}':[/bold blue]")
+    
+    table = Table(
+        title=f"[bold cyan]Search Results for '{keyword}'[/bold cyan]",
+        show_header=True,
+        header_style="bold magenta",
+        box=box.ROUNDED,
+        show_lines=True
+    )
+    table.add_column("ID / Alias", justify="center", style="dim")
+    table.add_column("Task", justify="left")
+    table.add_column("Due Date", justify="center")
+    table.add_column("Priority", justify="center")
+    table.add_column("Status", justify="center")
+    table.add_column("Added Date", justify="center")
+    table.add_column("Repeat", justify="center")
+
+    children_map = defaultdict(list)
+    for todo in results: # Only map children that are *in the search results*
+        children_map[todo.parent_id].append(todo)
+
+    def add_task_rows_recursive_search(tasks: List[Todo], level: int = 0):
+        for task in tasks:
+            indent = "  " * level
+            task_text = f"{indent}{task.task}"
+            row_style = ""
+            status_text = Text(task.status.capitalize(), style="white")
+            priority_style = "white"
+
+            if task.status == "done":
+                row_style = "strike dim"
+                status_text = Text("✔ Done", style="green")
+            elif task.status == "in-progress":
+                status_text = Text("In Progress", style="blue")
+            elif task.status == "pending":
+                if task.due_date:
+                    try:
+                        if datetime.fromisoformat(task.due_date).date() < datetime.now().date():
+                            row_style = "red bold"
+                            status_text = Text("Overdue", style="red bold")
+                    except ValueError:
+                        pass
+
+            if task.priority == "high":
+                priority_style = "bold red"
+            elif task.priority == "medium":
+                priority_style = "yellow"
+            elif task.priority == "low":
+                priority_style = "green"
+            
+            safe_priority = task.priority.capitalize() if task.priority else "Medium"
+
+            id_alias_display = str(task.id)
+            if task.alias:
+                id_alias_display += f" ({task.alias})"
+            if task.parent_id:
+                id_alias_display = f"{indent}↳ {id_alias_display}"
+
+            due_display = short_date(task.due_date) if task.due_date and not task.parent_id else "-"
+            priority_display = safe_priority if not task.parent_id else "-"
+            repeat_display = task.recurrence or "-" if not task.parent_id else "-"
+
+            table.add_row(
+                Text(id_alias_display, style=row_style),
+                Text(task_text, style=row_style),
+                Text(due_display, style=row_style),
+                Text(priority_display, style=priority_style),
+                status_text,
+                Text(short_date(task.date_added), style=row_style),
+                Text(repeat_display, style=row_style)
+            )
+            
+            # Only add children that were also found in the search results
+            if task.id in children_map and children_map[task.id]:
+                add_task_rows_recursive_search(children_map[task.id], level + 1)
+    
+    # Filter top-level tasks from search results
+    top_level_search_results = [t for t in results if t.parent_id is None]
+    add_task_rows_recursive_search(top_level_search_results)
+
+    console.print(table)
+
+
+# This __main__ block is for direct execution of this script, typically for dev/testing.
+# In a real CLI, it would be run via `python -m your_package_name` or similar.
 if __name__ == "__main__":
     todo_app()
-
