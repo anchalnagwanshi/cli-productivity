@@ -7,13 +7,12 @@ ProdCLI is a powerful and versatile command-line application designed to help yo
 
 ## 📋 Table of Contents
 
-- [Features ✨](#features-)
-- [Prerequisites](#prerequisites-)
-- [Installation 🛠️](#installation-)
-- [Usage 🚀](#usage-)
-- [Project Structure 📁](#project-structure-)
-- [Contributing 🤝](#contributing-)
-- [Contact 📧](#contact-)
+- [Features ✨](#-features)
+- [Prerequisites](#-prerequisites)
+- [Installation 🛠️](#-installation)
+- [Usage 🚀](#-usage)
+- [Project Structure 📁](#-project-structure)
+- [Contributing 🤝](#-contributing)
 
 ---
 
@@ -155,9 +154,3 @@ src/
 5. Open a Pull Request
 
 ---
-
-## 📧 Contact
-
-**Anchal Nagwanshi**  
-🔗 [GitHub](https://github.com/anchalnagwanshi)  
-📫 anchalnagwanshi2000@gmail.com
